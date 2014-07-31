@@ -60,19 +60,39 @@ func (player *Player) DealCard(card *Card) {
 	player.Hand[0] = card
 }
 
+
+func (player *Player) GetRank() int {
+  rank := 1
+  for _, card := range player.Hand {
+    if card != nil && card.Value > rank {
+      rank = card.Value
+    }
+  }
+  return rank
+}
+
 func (player *Player) DrawCard(card *Card) {
-	player.Hand[1] = card
+  for idx, val := range player.Hand {
+    if val == nil {
+      player.Hand[idx] = card
+      return
+    }
+  }
 }
 
 func (player *Player) ExpendCard(cardType int) {
 	for idx, card := range player.Hand {
 		if card != nil && card.Value == cardType {
-			player.DiscardCard(idx)
+			player.discardCardInIndex(idx)
 		}
 	}
 }
 
-func (player *Player) DiscardCard(idx int) {
+func (player *Player) DiscardCard() {
+  player.discardCardInIndex(0)
+}
+
+func (player *Player) discardCardInIndex(idx int) {
 	player.ExpendedCards = append(player.ExpendedCards, player.Hand[idx])
 	player.Hand[idx] = nil
 
@@ -83,6 +103,9 @@ func (player *Player) DiscardCard(idx int) {
 }
 
 func (player Player) String() string {
+  if (!player.Alive) {
+    return fmt.Sprintf("%s: <DEAD>", player.Name)
+  }
 	return fmt.Sprintf("%s: %v", player.Name, player.Hand)
 }
 
@@ -159,10 +182,13 @@ func (deck *Deck) addCard(card *Card) {
 }
 
 func (deck *Deck) drawCard() *Card {
-	topCard := deck.Cards[len(deck.Cards)-1]
-	deck.Cards = deck.Cards[:len(deck.Cards)-1]
+  if len(deck.Cards) > 0 {
+    topCard := deck.Cards[len(deck.Cards)-1]
+    deck.Cards = deck.Cards[:len(deck.Cards)-1]
 
-	return topCard
+    return topCard
+  }
+  return nil
 }
 
 func (deck *Deck) shuffle() {
@@ -208,7 +234,7 @@ func (game *Game) StartGame() {
 
 	game.actingPlayer = rand.Intn(len(game.Players))
 	game.Gamestate = "Playing"
-	game.Players[game.actingPlayer].DrawCard(game.Deck.drawCard())
+  game.DrawCard(game.Players[game.actingPlayer])
 }
 
 /* playCard is the main method to the game.  On your turn you will draw a new
@@ -269,12 +295,8 @@ func (game *Game) playCard(player *Player, cardType int, target *Player, argumen
 			fmt.Println(target.Name, "is an invalid target")
 			break
 		}
-		if target.HasCard(8) {
-			target.KillPlayer()
-		} else {
-			target.DiscardCard(0)
-			target.DealCard(game.Deck.drawCard())
-		}
+    game.DiscardCard(target)
+    game.DrawCard(target)
 	case 6:
 		if target.IsProtected() || !target.Alive {
 			fmt.Println(target.Name, "is an invalid target")
@@ -287,22 +309,66 @@ func (game *Game) playCard(player *Player, cardType int, target *Player, argumen
 		player.KillPlayer()
 	}
 
+  if game.IsGameOver() {
+		game.Gamestate = "GameOver"
+		fmt.Println("Game Over!")
+    return
+  }
+
+	game.AdvancePlayer()
+	game.DrawCard(nil)
+}
+
+func (game *Game) DiscardCard(player *Player) {
+  if player.HasCard(8) {
+    player.KillPlayer()
+  } else {
+    player.DiscardCard()
+  }
+}
+
+func (game *Game) TurnEnd() {
+  //Check win conditions here
+  game.AdvancePlayer()
+  game.DrawCard(nil)
+}
+
+func (game *Game) IsGameOver() bool {
 	alivePlayers := 0
-	var alivePlayer *Player
 	for _, player := range game.Players {
 		if player.Alive {
 			alivePlayers++
-			alivePlayer = player
 		}
 	}
 	if alivePlayers <= 1 {
-		fmt.Println(alivePlayer, "is the winner!")
-		game.Gamestate = "GameOver"
-		return
+		return true
 	}
 
-	game.AdvancePlayer()
-	game.DrawCard()
+  return false
+}
+
+func (game *Game) FindWinningPlayer() *Player {
+  var highestRankingPlayer *Player
+  highestRank := 0
+  playersAtRank := 0
+  for _, player := range game.Players {
+    if player.Alive {
+      playerRank := player.GetRank()
+      if playerRank > highestRank {
+        highestRank = playerRank
+        highestRankingPlayer = player
+        playersAtRank = 1
+      } else if playerRank == highestRank {
+        playersAtRank++
+      }
+    }
+  }
+
+  if playersAtRank > 1 {
+    //Go into a tiebreaker based on expended cards
+  }
+
+  return highestRankingPlayer
 }
 
 func (game *Game) AdvancePlayer() {
@@ -313,21 +379,25 @@ func (game *Game) AdvancePlayer() {
 	}
 }
 
-func (game *Game) DrawCard() {
-	player := game.Players[game.actingPlayer]
+func (game *Game) DrawCard(player *Player) {
+  if player == nil {
+    player = game.Players[game.actingPlayer]
+  }
 	nextCard := game.Deck.drawCard()
 	if nextCard == nil {
 		fmt.Println("Ran out of cards!")
+    winner := game.FindWinningPlayer()
+    fmt.Println(winner.Name, "won by having the highest rank")
 		game.Gamestate = "GameOver"
 		return
 	}
 	player.DrawCard(nextCard)
 
-	if player.HasCard(7) && player.CardSum() > 12 {
+	if player.HasCard(7) && player.CardSum() >= 12 {
 		fmt.Println(player.Name, "was betrayed by their minister")
 		player.KillPlayer()
 		game.AdvancePlayer()
-		game.DrawCard()
+		game.DrawCard(nil)
 	}
 }
 
@@ -338,13 +408,13 @@ func main() {
 	fmt.Println(game)
 
 	for game.Gamestate == "Playing" {
-		fmt.Println(game)
-
 		player := game.Players[game.actingPlayer]
 		cardIdx := rand.Intn(2)
 		target := game.Players[(game.actingPlayer+1)%len(game.Players)]
 		cardVal := rand.Intn(8) + 1
 
 		game.playCard(player, player.Hand[cardIdx].Value, target, cardVal)
+
+		fmt.Println(game)
 	}
 }
